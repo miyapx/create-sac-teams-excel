@@ -57,7 +57,7 @@ class SacRoleCoreTests(unittest.TestCase):
     def test_load_workbook_uses_actual_sheet_and_column_names(self):
         from sac_role_core import load_workbook_data
 
-        workbook = load_workbook_data(ROOT / "data" / "sac_team_data.xlsx")
+        workbook = load_workbook_data(ROOT / "sac_team_data.xlsx")
 
         self.assertEqual(len(workbook.teams), 10)
         self.assertEqual(workbook.teams[0].team_id, "T_Alpha_Finance_Planners")
@@ -67,7 +67,7 @@ class SacRoleCoreTests(unittest.TestCase):
     def test_load_workbook_data_from_uploaded_bytes(self):
         from sac_role_core import load_workbook_data_from_bytes
 
-        workbook_path = ROOT / "data" / "sac_team_data.xlsx"
+        workbook_path = ROOT / "sac_team_data.xlsx"
         workbook = load_workbook_data_from_bytes(workbook_path.read_bytes())
 
         self.assertEqual(len(workbook.teams), 10)
@@ -89,7 +89,7 @@ class SacRoleCoreTests(unittest.TestCase):
     def test_plan_groups_role_assignments_and_user_assignments(self):
         from sac_role_core import build_execution_plan, load_workbook_data
 
-        workbook = load_workbook_data(ROOT / "data" / "sac_team_data.xlsx")
+        workbook = load_workbook_data(ROOT / "sac_team_data.xlsx")
         plan = build_execution_plan(workbook)
 
         self.assertEqual(len(plan.create_team_ops), 10)
@@ -100,7 +100,7 @@ class SacRoleCoreTests(unittest.TestCase):
     def test_dry_run_report_mentions_all_three_steps(self):
         from sac_role_core import build_execution_plan, dry_run_report, load_workbook_data
 
-        workbook = load_workbook_data(ROOT / "data" / "sac_team_data.xlsx")
+        workbook = load_workbook_data(ROOT / "sac_team_data.xlsx")
         plan = build_execution_plan(workbook)
         report = dry_run_report(plan)
 
@@ -113,7 +113,7 @@ class SacRoleCoreTests(unittest.TestCase):
     def test_workbook_record_counts_returns_sheet_totals(self):
         from sac_role_core import load_workbook_data, workbook_record_counts
 
-        workbook = load_workbook_data(ROOT / "data" / "sac_team_data.xlsx")
+        workbook = load_workbook_data(ROOT / "sac_team_data.xlsx")
 
         counts = workbook_record_counts(workbook)
 

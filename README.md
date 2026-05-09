@@ -17,9 +17,7 @@ This repository is **our own implementation**. It is shared as a **free source-a
 
 ## Quick Links
 
-- Thai README: [docs/readme-th.md](docs/readme-th.md)
-- English guide: [docs/guide-en.md](docs/guide-en.md)
-- Thai guide: [docs/guide-th.md](docs/guide-th.md)
+- Thai README: [README_TH.md](README_TH.md)
 - License: [LICENSE.md](LICENSE.md)
 
 ## Clean Repository Layout
@@ -27,16 +25,17 @@ This repository is **our own implementation**. It is shared as a **free source-a
 ```text
 SAC_ROLE/
 ├── .streamlit/
-├── assets/
-├── data/
-├── docs/
-├── examples/
-├── scripts/
 ├── tests/
 ├── app.py
 ├── sac_role_core.py
+├── sac_team_data.xlsx
+├── config.ini.example
+├── run.command
+├── run.bat
+├── miya.png
 ├── requirements.txt
 ├── README.md
+├── README_TH.md
 └── LICENSE.md
 ```
 
@@ -54,9 +53,9 @@ Notes:
 - `Assign_Roles` can target teams created in this run or teams that already exist in SAC.
 - `Users` is treated as existing-user assignment only.
 
-The template workbook is stored at:
+The Excel template is stored at:
 
-- `data/sac_team_data.xlsx`
+- `sac_team_data.xlsx`
 
 ## Clone -> Install -> Run
 
@@ -69,14 +68,14 @@ python3 -m streamlit run app.py
 
 Or use:
 
-- `scripts/run.command` on macOS
-- `scripts/run.bat` on Windows
+- `run.command` on macOS
+- `run.bat` on Windows
 
 ## App Flow
 
-1. Click `Download Excel template` if you want the workbook format.
-2. Upload your own `.xlsx` file.
-3. Open `Connection Settings`.
+1. Click `Download Excel template`
+2. Upload your own `.xlsx` file
+3. Open `Connection Settings`
 4. Fill in:
    - `tenant_url`
    - `token_url`
@@ -93,13 +92,6 @@ Available tasks:
 - `Assign Roles`
 - `Assign Users`
 - `Run All`
-
-## Repository Notes
-
-- `assets/` contains the favicon and branding assets.
-- `docs/` contains the Thai README and guide-style writeups.
-- `examples/` contains `config.ini.example`.
-- `scripts/` contains helper launchers.
 
 ## Operational Cautions
 
