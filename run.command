@@ -2,4 +2,4 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-python3 -m streamlit run app.py
+python3 -m streamlit run toolkit/app.py

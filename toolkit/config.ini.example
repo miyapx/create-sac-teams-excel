@@ -3,3 +3,4 @@ tenant_url = https://your-tenant.ap11.analytics.cloud.sap
 token_url = https://your-tenant.authentication.ap11.hana.ondemand.com/oauth/token
 client_id = your_client_id_here
 client_secret = your_client_secret_here
+custom_role_prefix = PROFILE:t.RGDWWG:

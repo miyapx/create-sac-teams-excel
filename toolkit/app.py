@@ -8,6 +8,7 @@ import streamlit.components.v1 as components
 
 from sac_role_core import (
     AppConfig,
+    DEFAULT_CUSTOM_ROLE_PREFIX,
     SacScimClient,
     build_execution_plan,
     dry_run_report,
@@ -26,7 +27,8 @@ APP_BROWSER_TITLE = "SAC Team"
 APP_TITLE = "Bulk Create SAC Teams from Excel"
 APP_SUBTITLE = "Upload one workbook, validate it, and run team, role, and user assignment from one minimal screen."
 APP_STATUS_DATE = "9 May 2026"
-APP_FAVICON_PATH = Path(__file__).with_name("miya.png")
+APP_DIR = Path(__file__).parent
+APP_FAVICON_PATH = APP_DIR / "miya.png"
 TASK_OPTIONS = [
     ("Validate & Preview", "preview", "Check the workbook and preview the planned actions without calling SAC."),
     ("Create Teams", "create-teams", "Create teams from the `Create_Teams` sheet."),
@@ -156,7 +158,7 @@ def initialize_session_defaults() -> None:
         "client_secret": "",
     }
 
-    config_path = Path("config.ini")
+    config_path = APP_DIR / "config.ini"
     if config_path.exists():
         try:
             config = load_config(config_path)
@@ -176,6 +178,15 @@ def initialize_session_defaults() -> None:
     st.session_state["_defaults_loaded"] = True
     st.session_state.setdefault("status_message", "")
     st.session_state.setdefault("action_error", "")
+    st.session_state.setdefault("completion_message", "")
+    st.session_state.setdefault(
+        "progress_state",
+        {
+            "visible": False,
+            "value": 0.0,
+            "message": "",
+        },
+    )
 
 
 def apply_browser_branding() -> None:
@@ -237,7 +248,8 @@ def build_config_from_form() -> AppConfig:
         token_url=token_url,
         client_id=client_id,
         client_secret=client_secret,
-        scim_base_url=f"{tenant_url}/api/v1/scim",
+        custom_role_prefix=DEFAULT_CUSTOM_ROLE_PREFIX,
+        scim_base_url=f"{tenant_url}/scim2",
     )
 
 
@@ -271,12 +283,94 @@ def append_log(message: str) -> None:
     logs.append(message)
 
 
+def append_client_debug_logs(client: SacScimClient) -> None:
+    snapshot = client.get_debug_snapshot()
+    append_log(f"DEBUG token_url: {snapshot['token_url']}")
+    append_log(
+        "DEBUG SCIM candidates: "
+        + ", ".join(snapshot["scim_base_url_candidates"])
+    )
+    active_scim_base_url = snapshot["active_scim_base_url"]
+    if active_scim_base_url:
+        append_log(f"DEBUG active SCIM base URL: {active_scim_base_url}")
+    trace = snapshot["trace"]
+    if trace:
+        append_log("DEBUG trace:")
+        for line in trace:
+            append_log(f"  - {line}")
+
+
+def set_progress_state(value: float, message: str, visible: bool = True) -> None:
+    st.session_state["progress_state"] = {
+        "visible": visible,
+        "value": max(0.0, min(1.0, value)),
+        "message": message,
+    }
+
+
+def clear_progress_state() -> None:
+    set_progress_state(0.0, "", visible=False)
+
+
+def render_progress_feedback(progress_slot, progress_text_slot) -> None:
+    progress_state = st.session_state.get("progress_state", {})
+    if progress_state.get("visible"):
+        progress_slot.progress(progress_state.get("value", 0.0))
+        progress_text_slot.caption(progress_state.get("message", ""))
+    else:
+        progress_slot.empty()
+        progress_text_slot.empty()
+
+
+def render_status_feedback(success_slot, error_slot) -> None:
+    completion_message = st.session_state.get("completion_message", "")
+    action_error = st.session_state.get("action_error", "")
+    if completion_message:
+        success_slot.success(completion_message)
+    else:
+        success_slot.empty()
+    if action_error:
+        error_slot.error(action_error)
+    else:
+        error_slot.empty()
+
+
+def _operation_total_for_action(action: str, plan) -> int:
+    if action == "create-teams":
+        return len(plan.create_team_ops)
+    if action == "assign-roles":
+        return len(plan.assign_role_ops)
+    if action == "assign-users":
+        return len(plan.assign_user_ops)
+    if action == "all":
+        return len(plan.create_team_ops) + len(plan.assign_role_ops) + len(plan.assign_user_ops)
+    return 0
+
+
+def _make_progress_callback(
+    progress_slot,
+    progress_text_slot,
+    phase_label: str,
+    phase_total: int,
+    overall_done: int,
+    overall_total: int,
+):
+    def callback(label: str, current: int, total: int) -> None:
+        effective_total = total or phase_total or 1
+        completed = overall_done + current
+        message = f"Running {phase_label} · {current}/{effective_total}"
+        set_progress_state(completed / max(overall_total, 1), message)
+        render_progress_feedback(progress_slot, progress_text_slot)
+
+    return callback
+
+
 initialize_session_defaults()
 apply_browser_branding()
 
 
 def config_path() -> Path:
-    return Path("config.ini")
+    return APP_DIR / "config.ini"
 
 
 def save_config_from_form() -> None:
@@ -294,34 +388,157 @@ def load_config_into_form() -> None:
     st.session_state["status_message"] = "Loaded config from local config.ini"
 
 
-def run_action(action: str) -> None:
+def run_action(action: str, progress_slot, progress_text_slot) -> None:
     st.session_state["preview_text"] = ""
+    st.session_state["completion_message"] = ""
     plan = get_plan()
 
     if action == "preview":
+        set_progress_state(0.2, "Preparing workbook preview...")
+        render_progress_feedback(progress_slot, progress_text_slot)
         st.session_state["preview_text"] = dry_run_report(plan)
+        set_progress_state(1.0, "Validate & Preview complete.")
+        render_progress_feedback(progress_slot, progress_text_slot)
+        st.session_state["completion_message"] = "Validate & Preview completed successfully."
         append_log("Validate & Preview completed successfully.")
         return
 
     config = build_config_from_form()
     client = SacScimClient(config)
+    append_log(f"Starting action: {action}")
+    append_log(f"Configured tenant URL: {config.tenant_url}")
+    append_log(f"Configured token URL: {config.token_url}")
+    append_log(f"Configured SCIM base URL: {config.scim_base_url}")
+    overall_total = _operation_total_for_action(action, plan)
+    if overall_total == 0:
+        set_progress_state(1.0, "No rows to process for this task.")
+        render_progress_feedback(progress_slot, progress_text_slot)
+        st.session_state["completion_message"] = "Nothing to run. The selected sheet has no rows to process."
+        append_log("Selected action had no rows to process.")
+        return
+    try:
+        if action == "create-teams":
+            append_log("Step: Create Teams")
+            set_progress_state(0.0, "Starting Create Teams...")
+            render_progress_feedback(progress_slot, progress_text_slot)
+            lines = run_create_teams(
+                client,
+                plan,
+                progress_callback=_make_progress_callback(
+                    progress_slot,
+                    progress_text_slot,
+                    "Create Teams",
+                    len(plan.create_team_ops),
+                    0,
+                    overall_total,
+                ),
+            )
+        elif action == "assign-roles":
+            append_log("Step: Assign Roles")
+            set_progress_state(0.0, "Starting Assign Roles...")
+            render_progress_feedback(progress_slot, progress_text_slot)
+            lines = run_assign_roles(
+                client,
+                plan,
+                progress_callback=_make_progress_callback(
+                    progress_slot,
+                    progress_text_slot,
+                    "Assign Roles",
+                    len(plan.assign_role_ops),
+                    0,
+                    overall_total,
+                ),
+            )
+        elif action == "assign-users":
+            append_log("Step: Assign Users")
+            set_progress_state(0.0, "Starting Assign Users...")
+            render_progress_feedback(progress_slot, progress_text_slot)
+            lines = run_assign_users(
+                client,
+                plan,
+                progress_callback=_make_progress_callback(
+                    progress_slot,
+                    progress_text_slot,
+                    "Assign Users",
+                    len(plan.assign_user_ops),
+                    0,
+                    overall_total,
+                ),
+            )
+        elif action == "all":
+            append_log("Step: Run All")
+            lines = []
+            completed = 0
+            append_log("Running team creation")
+            if plan.create_team_ops:
+                set_progress_state(completed / overall_total, "Starting Create Teams...")
+                render_progress_feedback(progress_slot, progress_text_slot)
+                lines.extend(
+                    run_create_teams(
+                        client,
+                        plan,
+                        progress_callback=_make_progress_callback(
+                            progress_slot,
+                            progress_text_slot,
+                            "Create Teams",
+                            len(plan.create_team_ops),
+                            completed,
+                            overall_total,
+                        ),
+                    )
+                )
+                completed += len(plan.create_team_ops)
+            append_log("Running role assignment")
+            if plan.assign_role_ops:
+                set_progress_state(completed / overall_total, "Starting Assign Roles...")
+                render_progress_feedback(progress_slot, progress_text_slot)
+                lines.extend(
+                    run_assign_roles(
+                        client,
+                        plan,
+                        progress_callback=_make_progress_callback(
+                            progress_slot,
+                            progress_text_slot,
+                            "Assign Roles",
+                            len(plan.assign_role_ops),
+                            completed,
+                            overall_total,
+                        ),
+                    )
+                )
+                completed += len(plan.assign_role_ops)
+            append_log("Running user assignment")
+            if plan.assign_user_ops:
+                set_progress_state(completed / overall_total, "Starting Assign Users...")
+                render_progress_feedback(progress_slot, progress_text_slot)
+                lines.extend(
+                    run_assign_users(
+                        client,
+                        plan,
+                        progress_callback=_make_progress_callback(
+                            progress_slot,
+                            progress_text_slot,
+                            "Assign Users",
+                            len(plan.assign_user_ops),
+                            completed,
+                            overall_total,
+                        ),
+                    )
+                )
+        else:
+            raise ValueError(f"Unknown action: {action}")
 
-    if action == "create-teams":
-        lines = run_create_teams(client, plan)
-    elif action == "assign-roles":
-        lines = run_assign_roles(client, plan)
-    elif action == "assign-users":
-        lines = run_assign_users(client, plan)
-    elif action == "all":
-        lines = []
-        lines.extend(run_create_teams(client, plan))
-        lines.extend(run_assign_roles(client, plan))
-        lines.extend(run_assign_users(client, plan))
-    else:
-        raise ValueError(f"Unknown action: {action}")
+        for line in lines:
+            append_log(line)
+        append_client_debug_logs(client)
+    except Exception:
+        append_client_debug_logs(client)
+        raise
 
-    for line in lines:
-        append_log(line)
+    completed_label = next(label for label, value, _ in TASK_OPTIONS if value == action)
+    set_progress_state(1.0, f"{completed_label} complete.")
+    render_progress_feedback(progress_slot, progress_text_slot)
+    st.session_state["completion_message"] = f"{completed_label} completed successfully."
 
 
 st.markdown(
@@ -342,7 +559,7 @@ with controls_col:
     with action_left:
         st.download_button(
             "Download Excel template",
-            data=Path("sac_team_data.xlsx").read_bytes(),
+            data=(APP_DIR / "sac_team_data.xlsx").read_bytes(),
             file_name="sac_team_data.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
@@ -420,19 +637,34 @@ st.markdown(
     f'<p class="task-note">{task_lookup[selected_task]["description"]}</p>',
     unsafe_allow_html=True,
 )
+run_clicked = False
 with task_right:
-    if st.button("Run", type="primary", use_container_width=True, disabled=actions_disabled):
-        try:
-            st.session_state["action_error"] = ""
-            run_action(task_lookup[selected_task]["action"])
-            st.toast(f"{selected_task} completed")
-        except Exception as exc:
-            append_log(f"ERROR during {selected_task}: {exc}")
-            st.session_state["action_error"] = str(exc)
+    run_clicked = st.button("Run", type="primary", use_container_width=True, disabled=actions_disabled)
 
-action_error = st.session_state.get("action_error", "")
-if action_error:
-    st.error(action_error)
+feedback_block = st.container()
+with feedback_block:
+    progress_slot = st.empty()
+    progress_text_slot = st.empty()
+    success_slot = st.empty()
+    error_slot = st.empty()
+
+render_progress_feedback(progress_slot, progress_text_slot)
+render_status_feedback(success_slot, error_slot)
+
+if run_clicked:
+    try:
+        st.session_state["action_error"] = ""
+        st.session_state["completion_message"] = ""
+        clear_progress_state()
+        render_progress_feedback(progress_slot, progress_text_slot)
+        render_status_feedback(success_slot, error_slot)
+        run_action(task_lookup[selected_task]["action"], progress_slot, progress_text_slot)
+        render_status_feedback(success_slot, error_slot)
+        st.toast(f"{selected_task} completed")
+    except Exception as exc:
+        append_log(f"ERROR during {selected_task}: {exc}")
+        st.session_state["action_error"] = str(exc)
+        render_status_feedback(success_slot, error_slot)
 
 
 preview_text = st.session_state.get("preview_text", "")

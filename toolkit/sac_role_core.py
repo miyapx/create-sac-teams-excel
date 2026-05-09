@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import configparser
 import json
-import ssl
-from base64 import b64encode
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Iterable
-from urllib import error, parse, request
+from urllib import parse
 
+import certifi
 from openpyxl import load_workbook
+import requests
 
 
 SCIM_GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group"
 SCIM_USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User"
+DEFAULT_CUSTOM_ROLE_PREFIX = "PROFILE:t.RGDWWG:"
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class AppConfig:
     token_url: str
     client_id: str
     client_secret: str
+    custom_role_prefix: str = DEFAULT_CUSTOM_ROLE_PREFIX
     verify_ssl: bool = True
     timeout_seconds: int = 30
     scim_base_url: str = ""
@@ -114,13 +116,14 @@ def load_config(path: Path) -> AppConfig:
         raise ValueError(f"config.ini is missing required SAC fields: {', '.join(missing)}")
 
     tenant_url = _clean(sac["tenant_url"]).rstrip("/")
-    scim_base_url = _clean(sac.get("scim_base_url")) or f"{tenant_url}/api/v1/scim"
+    scim_base_url = _clean(sac.get("scim_base_url")) or f"{tenant_url}/scim2"
 
     return AppConfig(
         tenant_url=tenant_url,
         token_url=_clean(sac["token_url"]),
         client_id=_clean(sac["client_id"]),
         client_secret=_clean(sac["client_secret"]),
+        custom_role_prefix=_clean(sac.get("custom_role_prefix")) or DEFAULT_CUSTOM_ROLE_PREFIX,
         verify_ssl=_to_bool(sac.get("verify_ssl", "true"), default=True),
         timeout_seconds=int(_clean(sac.get("timeout_seconds")) or "30"),
         scim_base_url=scim_base_url.rstrip("/"),
@@ -134,6 +137,7 @@ def save_config(config: AppConfig, path: Path) -> None:
         "token_url": config.token_url,
         "client_id": config.client_id,
         "client_secret": config.client_secret,
+        "custom_role_prefix": config.custom_role_prefix,
     }
     with path.open("w", encoding="utf-8") as handle:
         parser.write(handle)
@@ -329,6 +333,16 @@ def dry_run_report(plan: ExecutionPlan) -> str:
     return "\n".join(lines)
 
 
+def _emit_progress(
+    progress_callback,
+    label: str,
+    current: int,
+    total: int,
+) -> None:
+    if progress_callback is not None:
+        progress_callback(label, current, total)
+
+
 class SacScimClient:
     """Our implementation for SAC SCIM provisioning.
 
@@ -340,38 +354,148 @@ class SacScimClient:
         self.config = config
         self._token: str | None = None
         self._csrf_cache: dict[str, tuple[str | None, str | None]] = {}
+        self._active_scim_base_url: str | None = None
+        self._trace_log: list[str] = []
+        self._session = requests.Session()
 
-    def _ssl_context(self):
+    def _trace(self, message: str) -> None:
+        self._trace_log.append(message)
+
+    def normalize_role_id(self, role_id: str) -> str:
+        cleaned = role_id.strip()
+        if cleaned.startswith("PROFILE:"):
+            return cleaned
+        return f"{self.config.custom_role_prefix}{cleaned}"
+
+    def get_debug_snapshot(self) -> dict[str, object]:
+        return {
+            "token_url": self.config.token_url,
+            "scim_base_url_candidates": self._scim_base_url_candidates(),
+            "active_scim_base_url": self._active_scim_base_url or "",
+            "trace": list(self._trace_log),
+        }
+
+    def _verify_value(self):
         if self.config.verify_ssl:
-            return None
-        return ssl._create_unverified_context()
+            return certifi.where()
+        return False
 
-    def _http(self, req: request.Request) -> tuple[int, dict[str, str], str]:
+    def _is_token_url(self, url: str) -> bool:
+        return url.startswith(self.config.token_url)
+
+    def _scim_base_url_candidates(self) -> list[str]:
+        configured = self.config.scim_base_url.rstrip("/")
+        tenant = self.config.tenant_url.rstrip("/")
+        candidates = [configured]
+
+        if configured.endswith("/scim2"):
+            candidates.append(f"{tenant}/api/v1/scim")
+        elif configured.endswith("/api/v1/scim"):
+            candidates.append(f"{tenant}/scim2")
+        else:
+            candidates.extend([f"{tenant}/scim2", f"{tenant}/api/v1/scim"])
+
+        unique_candidates = []
+        seen = set()
+        for candidate in candidates:
+            if candidate not in seen:
+                unique_candidates.append(candidate)
+                seen.add(candidate)
+        return unique_candidates
+
+    def _current_scim_base_urls(self) -> list[str]:
+        if self._active_scim_base_url:
+            return [self._active_scim_base_url]
+        return self._scim_base_url_candidates()
+
+    def _is_route_not_found_error(self, message: str) -> bool:
+        lowered = message.lower()
+        return "404" in lowered and "route does not exist" in lowered
+
+    def _request_target_label(self, url: str) -> str:
+        if self._is_token_url(url):
+            return "token_url"
+        if any(url.startswith(base_url) for base_url in self._scim_base_url_candidates()):
+            return "SAC SCIM API"
+        return url
+
+    def _format_http_error(self, method: str, url: str, status_code: int, body: str) -> str:
+        target = self._request_target_label(url)
+        body_lower = body.lower()
+        if self._is_token_url(url) and status_code in {401, 403}:
+            return (
+                f"Authentication failed during {method} {target} ({status_code}). "
+                "Check client_id, client_secret, OAuth client setup, and User Provisioning access."
+            )
+        if self._is_token_url(url) and status_code == 404:
+            return (
+                f"{method} token_url returned 404. Check that the Token URL was copied exactly from the SAC OAuth client details."
+            )
+        if status_code == 403 and ("csrf" in body_lower or "cookie" in body_lower):
+            return (
+                f"Possible CSRF or session cookie issue during {method} {target} ({status_code}). "
+                f"Response: {body}"
+            )
+        if status_code in {401, 403}:
+            return (
+                f"Authorization failed during {method} {target} ({status_code}). "
+                f"Response: {body or 'No response body.'} "
+                "Check the OAuth client permissions, access token, and SAC-side authorization."
+            )
+        response_suffix = f" Response: {body}" if body else ""
+        return f"HTTP {status_code} during {method} {target}.{response_suffix}"
+
+    def _format_url_error(self, url: str, reason: object) -> str:
+        target = self._request_target_label(url)
+        reason_text = str(reason)
+        if isinstance(reason, requests.exceptions.SSLError) or "CERTIFICATE_VERIFY_FAILED" in reason_text:
+            return (
+                f"SSL verification failed while connecting to {target}. "
+                "Check your local Python certificates, company proxy or SSL inspection, or the endpoint certificate chain."
+            )
+        return f"Connection failed while calling {target}: {reason_text}"
+
+    def _http(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        json_body: dict | None = None,
+        auth: tuple[str, str] | None = None,
+    ) -> tuple[int, dict[str, str], str]:
         try:
-            with request.urlopen(
-                req,
+            response = self._session.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=json_body,
+                auth=auth,
                 timeout=self.config.timeout_seconds,
-                context=self._ssl_context(),
-            ) as response:
-                body = response.read().decode("utf-8")
-                return response.status, dict(response.headers.items()), body
-        except error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"HTTP {exc.code} for {req.full_url}: {body}") from exc
+                verify=self._verify_value(),
+            )
+        except requests.exceptions.RequestException as exc:
+            raise RuntimeError(self._format_url_error(url, exc)) from exc
+
+        body = response.text
+        if response.status_code >= 400:
+            raise RuntimeError(self._format_http_error(method, url, response.status_code, body))
+        return response.status_code, dict(response.headers.items()), body
 
     def get_access_token(self) -> str:
         if self._token:
+            self._trace("Reusing cached access token.")
             return self._token
 
         token_url = self.config.token_url
         separator = "&" if "?" in token_url else "?"
         token_url = f"{token_url}{separator}grant_type=client_credentials"
-        req = request.Request(token_url, method="POST")
-        basic = b64encode(
-            f"{self.config.client_id}:{self.config.client_secret}".encode("utf-8")
-        ).decode("ascii")
-        req.add_header("Authorization", f"Basic {basic}")
-        status, _, body = self._http(req)
+        self._trace(f"Requesting access token from {token_url}")
+        status, _, body = self._http(
+            "POST",
+            token_url,
+            auth=(self.config.client_id, self.config.client_secret),
+        )
         if status != 200:
             raise RuntimeError(f"Token request failed with status {status}.")
         parsed = json.loads(body)
@@ -379,6 +503,7 @@ class SacScimClient:
         if not token:
             raise RuntimeError("Token response did not include access_token.")
         self._token = token
+        self._trace("Access token request succeeded.")
         return token
 
     def _base_headers(self) -> dict[str, str]:
@@ -390,81 +515,149 @@ class SacScimClient:
 
     def fetch_csrf(self, resource: str) -> tuple[str | None, str | None]:
         if resource in self._csrf_cache:
+            self._trace(f"Reusing cached CSRF token for {resource}.")
             return self._csrf_cache[resource]
-        req = request.Request(f"{self.config.scim_base_url}/{resource}", method="GET")
-        for key, value in self._base_headers().items():
-            req.add_header(key, value)
-        req.add_header("x-csrf-token", "fetch")
-        status, headers, _ = self._http(req)
-        if status != 200:
-            raise RuntimeError(f"Unable to fetch CSRF token for {resource}.")
-        csrf = headers.get("x-csrf-token")
-        cookie = headers.get("set-cookie")
-        self._csrf_cache[resource] = (csrf, cookie)
-        return csrf, cookie
+
+        last_error: RuntimeError | None = None
+        for base_url in self._current_scim_base_urls():
+            self._trace(f"Fetching CSRF token for {resource} from {base_url}/{resource}")
+            try:
+                headers = self._base_headers()
+                headers["x-csrf-token"] = "fetch"
+                status, response_headers, _ = self._http("GET", f"{base_url}/{resource}", headers=headers)
+            except RuntimeError as exc:
+                last_error = exc
+                self._trace(f"CSRF fetch failed for {base_url}/{resource}: {exc}")
+                if self._is_route_not_found_error(str(exc)):
+                    continue
+                raise
+            if status != 200:
+                raise RuntimeError(f"Unable to fetch CSRF token for {resource}.")
+            csrf = response_headers.get("x-csrf-token")
+            cookie = response_headers.get("set-cookie")
+            self._active_scim_base_url = base_url
+            self._trace(f"CSRF token fetch succeeded for {resource}. Active SCIM base URL: {base_url}")
+            self._csrf_cache[resource] = (csrf, cookie)
+            return csrf, cookie
+
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"Unable to fetch CSRF token for {resource}.")
 
     def _json_request(self, method: str, url: str, payload: dict, csrf_resource: str) -> dict:
-        body = json.dumps(payload).encode("utf-8")
-        req = request.Request(url, data=body, method=method)
-        for key, value in self._base_headers().items():
-            req.add_header(key, value)
-        req.add_header("Content-Type", "application/scim+json")
+        self._trace(f"Sending {method} request to {url}")
+        headers = self._base_headers()
+        headers["Content-Type"] = "application/json"
         csrf, cookie = self.fetch_csrf(csrf_resource)
         if csrf:
-            req.add_header("x-csrf-token", csrf)
+            headers["x-csrf-token"] = csrf
         if cookie:
-            req.add_header("Cookie", cookie)
-        _, _, text = self._http(req)
+            headers["Cookie"] = cookie
+        _, _, text = self._http(method, url, headers=headers, json_body=payload)
+        self._trace(f"{method} request succeeded for {url}")
         return json.loads(text) if text else {}
 
+    def _scim_json_request(self, method: str, path: str, payload: dict, csrf_resource: str) -> dict:
+        last_error: RuntimeError | None = None
+        for base_url in self._current_scim_base_urls():
+            try:
+                self._trace(f"Trying SCIM path {base_url}/{path.lstrip('/')}")
+                result = self._json_request(method, f"{base_url}/{path.lstrip('/')}", payload, csrf_resource)
+                self._active_scim_base_url = base_url
+                return result
+            except RuntimeError as exc:
+                last_error = exc
+                self._trace(f"SCIM request failed for {base_url}/{path.lstrip('/')}: {exc}")
+                if self._is_route_not_found_error(str(exc)):
+                    continue
+                raise
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"Unable to call SCIM path: {path}")
+
     def get_team(self, team_id: str) -> dict | None:
-        req = request.Request(f"{self.config.scim_base_url}/Groups/{parse.quote(team_id)}", method="GET")
-        for key, value in self._base_headers().items():
-            req.add_header(key, value)
-        try:
-            _, _, body = self._http(req)
-        except RuntimeError as exc:
-            if "HTTP 404" in str(exc):
-                return None
-            raise
-        return json.loads(body) if body else None
+        last_error: RuntimeError | None = None
+        for base_url in self._current_scim_base_urls():
+            self._trace(f"Checking team at {base_url}/Groups/{parse.quote(team_id)}")
+            try:
+                _, _, body = self._http(
+                    "GET",
+                    f"{base_url}/Groups/{parse.quote(team_id)}",
+                    headers=self._base_headers(),
+                )
+                self._active_scim_base_url = base_url
+                self._trace(f"Team lookup succeeded for {team_id}. Active SCIM base URL: {base_url}")
+                return json.loads(body) if body else None
+            except RuntimeError as exc:
+                last_error = exc
+                self._trace(f"Team lookup failed for {team_id} at {base_url}: {exc}")
+                if self._is_route_not_found_error(str(exc)):
+                    continue
+                if "HTTP 404" in str(exc):
+                    return None
+                raise
+        if last_error:
+            raise last_error
+        return None
 
     def get_user(self, username: str) -> dict | None:
-        req = request.Request(f"{self.config.scim_base_url}/Users/{parse.quote(username)}", method="GET")
-        for key, value in self._base_headers().items():
-            req.add_header(key, value)
-        try:
-            _, _, body = self._http(req)
-        except RuntimeError as exc:
-            if "HTTP 404" in str(exc):
-                return None
-            raise
-        return json.loads(body) if body else None
+        last_error: RuntimeError | None = None
+        for base_url in self._current_scim_base_urls():
+            self._trace(f"Checking user at {base_url}/Users/{parse.quote(username)}")
+            try:
+                _, _, body = self._http(
+                    "GET",
+                    f"{base_url}/Users/{parse.quote(username)}",
+                    headers=self._base_headers(),
+                )
+                self._active_scim_base_url = base_url
+                self._trace(f"User lookup succeeded for {username}. Active SCIM base URL: {base_url}")
+                return json.loads(body) if body else None
+            except RuntimeError as exc:
+                last_error = exc
+                self._trace(f"User lookup failed for {username} at {base_url}: {exc}")
+                if self._is_route_not_found_error(str(exc)):
+                    continue
+                if "HTTP 404" in str(exc):
+                    return None
+                raise
+        if last_error:
+            raise last_error
+        return None
 
     def create_team(self, op: CreateTeamOp) -> None:
+        self._trace(f"Step: create team {op.team_id}")
         existing = self.get_team(op.team_id)
         if existing:
+            self._trace(f"Team {op.team_id} already exists. Skipping create.")
             return
         payload = {
             "schemas": [SCIM_GROUP_SCHEMA],
             "id": op.team_id,
             "displayName": op.description or op.team_id,
         }
-        self._json_request("POST", f"{self.config.scim_base_url}/Groups", payload, "Groups")
+        self._scim_json_request("POST", "Groups", payload, "Groups")
 
     def assign_roles(self, op: AssignRoleOp) -> None:
+        self._trace(f"Step: assign roles to team {op.team_id}")
         team = self.get_team(op.team_id)
         if not team:
             raise RuntimeError(f"Team '{op.team_id}' does not exist.")
-        team["roles"] = op.role_ids
-        self._json_request(
+        normalized_role_ids = [self.normalize_role_id(role_id) for role_id in op.role_ids]
+        self._trace(
+            "Normalized role IDs for team "
+            f"{op.team_id}: {', '.join(normalized_role_ids)}"
+        )
+        team["roles"] = normalized_role_ids
+        self._scim_json_request(
             "PUT",
-            f"{self.config.scim_base_url}/Groups/{parse.quote(op.team_id)}",
+            f"Groups/{parse.quote(op.team_id)}",
             team,
             "Groups",
         )
 
     def assign_user_teams(self, op: AssignUserOp) -> None:
+        self._trace(f"Step: assign user {op.username} to teams {', '.join(op.team_ids)}")
         user = self.get_user(op.username)
         if not user:
             raise RuntimeError(
@@ -475,33 +668,39 @@ class SacScimClient:
             entry.get("value") for entry in user.get("groups", []) if entry.get("value")
         }
         user["groups"] = [{"value": team_id} for team_id in sorted(existing_team_ids.union(op.team_ids))]
-        self._json_request(
+        self._scim_json_request(
             "PUT",
-            f"{self.config.scim_base_url}/Users/{parse.quote(op.username)}",
+            f"Users/{parse.quote(op.username)}",
             user,
             "Users",
         )
 
 
-def run_create_teams(client: SacScimClient, plan: ExecutionPlan) -> list[str]:
+def run_create_teams(client: SacScimClient, plan: ExecutionPlan, progress_callback=None) -> list[str]:
     lines = []
-    for op in plan.create_team_ops:
+    total = len(plan.create_team_ops)
+    for index, op in enumerate(plan.create_team_ops, start=1):
         client.create_team(op)
         lines.append(f"Team ready: {op.team_id}")
+        _emit_progress(progress_callback, "Create Teams", index, total)
     return lines
 
 
-def run_assign_roles(client: SacScimClient, plan: ExecutionPlan) -> list[str]:
+def run_assign_roles(client: SacScimClient, plan: ExecutionPlan, progress_callback=None) -> list[str]:
     lines = []
-    for op in plan.assign_role_ops:
+    total = len(plan.assign_role_ops)
+    for index, op in enumerate(plan.assign_role_ops, start=1):
         client.assign_roles(op)
         lines.append(f"Roles assigned: {op.team_id} -> {', '.join(op.role_ids)}")
+        _emit_progress(progress_callback, "Assign Roles", index, total)
     return lines
 
 
-def run_assign_users(client: SacScimClient, plan: ExecutionPlan) -> list[str]:
+def run_assign_users(client: SacScimClient, plan: ExecutionPlan, progress_callback=None) -> list[str]:
     lines = []
-    for op in plan.assign_user_ops:
+    total = len(plan.assign_user_ops)
+    for index, op in enumerate(plan.assign_user_ops, start=1):
         client.assign_user_teams(op)
         lines.append(f"User assigned: {op.username} -> {', '.join(op.team_ids)}")
+        _emit_progress(progress_callback, "Assign Users", index, total)
     return lines

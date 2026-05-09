@@ -1,129 +1,139 @@
 # Bulk Create SAC Teams from Excel
 
-Bulk-upload SAC team setup from one Excel workbook, then run:
+Lightweight local toolkit for SAC admins and consultants to:
 
-- team creation
-- role assignment
-- user-to-team assignment
+- create teams
+- assign roles
+- assign existing users to teams
 
-from one local Streamlit tool.
+using one Excel workbook and one Streamlit UI.
 
-This repository is **our own implementation**. It is shared as a **free source-available toolkit**, not an OSI-style open-source project, because the current license restricts commercial use.
+## Clean Layout
 
-## Best For
-
-- SAC consultants preparing or validating team provisioning
-- SAC admins running controlled local or internal operations
-
-## Quick Links
-
-- Thai README: [README_TH.md](README_TH.md)
-- License: [LICENSE.md](LICENSE.md)
-
-## Clean Repository Layout
+Root is intentionally minimal.
 
 ```text
 SAC_ROLE/
 ├── .streamlit/
-├── tests/
-├── app.py
-├── sac_role_core.py
-├── sac_team_data.xlsx
-├── config.ini.example
-├── run.command
-├── run.bat
-├── miya.png
-├── requirements.txt
+├── toolkit/
 ├── README.md
-├── README_TH.md
-└── LICENSE.md
+├── run.command
+└── run.bat
 ```
 
-## Workbook Contract
+## What Is Inside `toolkit/`
 
-The app expects one `.xlsx` file with these sheets and columns:
+- `app.py` — Streamlit UI
+- `sac_role_core.py` — provisioning logic
+- `sac_team_data.xlsx` — Excel template
+- `config.ini.example` — sample config
+- `requirements.txt` — Python dependencies
+- `miya.png` — app icon
+- `LICENSE.md` — license
+- `README_TH.md` — Thai usage notes
+- `COMMON_ERRORS.md` — common troubleshooting guide
+- `tests/` — local test coverage
 
-- `Create_Teams`: `Team ID`, `Team Description`
-- `Assign_Roles`: `TeamID`, `RoleID`
-- `Users`: `UserName`, `TeamID`
+## Run
 
-Notes:
-
-- `RoleID` is sent exactly as written in Excel.
-- `Assign_Roles` can target teams created in this run or teams that already exist in SAC.
-- `Users` is treated as existing-user assignment only.
-
-The Excel template is stored at:
-
-- `sac_team_data.xlsx`
-
-## Clone -> Install -> Run
+macOS:
 
 ```bash
-git clone <your-repo-url>
-cd <repo-folder-name>
-python3 -m pip install -r requirements.txt
-python3 -m streamlit run app.py
+./run.command
 ```
 
-Or use:
+Windows:
 
-- `run.command` on macOS
-- `run.bat` on Windows
+```bat
+run.bat
+```
 
-## App Flow
-
-1. Click `Download Excel template`
-2. Upload your own `.xlsx` file
-3. Open `Connection Settings`
-4. Fill in:
-   - `tenant_url`
-   - `token_url`
-   - `client_id`
-   - `client_secret`
-5. Optional: save the values locally into `config.ini`
-6. Choose a task from the dropdown
-7. Click `Run`
-
-Available tasks:
-
-- `Validate & Preview`
-- `Create Teams`
-- `Assign Roles`
-- `Assign Users`
-- `Run All`
-
-## Operational Cautions
-
-- `Validate & Preview` can run without SAC credentials, but the other tasks require valid connection settings.
-- `Assign Roles` expects the target team to already exist in SAC or be created earlier in the same workbook flow.
-- `Assign Users` works with existing SAC users only. It does not create user profiles from this workbook format.
-- Review logs before re-running large batches, especially after partial failures.
-- Validate the flow in a non-production tenant first.
-
-## Deployment Guidance
-
-If you adapt this into a deployed UI for customers:
-
-- do not hardcode `client_secret`
-- do not expose OAuth credentials in browser-accessible code
-- do not commit customer config files into Git
-- do not leak secrets through logs, screenshots, demo videos, or shared packages
-- prefer server-side secret storage or a secure secret manager
-- use a dedicated OAuth client with only the scope you really need
-
-## Local Verification
+Or manually:
 
 ```bash
-python3 -m py_compile app.py sac_role_core.py
-python3 -m unittest discover -s tests -v
+python3 -m pip install -r toolkit/requirements.txt
+python3 -m streamlit run toolkit/app.py
 ```
 
-## License
+## SSL Certificate Requirement
 
-This repository is shared free of charge for personal, learning, and internal non-commercial use only.
+This toolkit calls SAC over HTTPS. On some machines, especially fresh local Python installs, Python may fail with:
 
-- No warranty is provided.
-- Use it at your own risk.
-- The author is not liable for any loss, damage, or production impact.
-- Commercial use is not allowed without separate permission.
+```text
+[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed
+```
+
+If `curl` can reach your `token_url` but Python cannot, the issue is usually the local Python certificate store.
+
+### macOS
+
+Install dependencies first:
+
+```bash
+python3 -m pip install -r toolkit/requirements.txt
+python3 -m pip install --upgrade certifi
+```
+
+If you installed Python from `python.org`, also run:
+
+```bash
+open "/Applications/Python 3.14/Install Certificates.command"
+```
+
+If needed, launch the app with the `certifi` bundle explicitly:
+
+```bash
+export SSL_CERT_FILE=$(python3 -c "import certifi; print(certifi.where())")
+python3 -m streamlit run toolkit/app.py
+```
+
+### Windows
+
+Install dependencies first:
+
+```bat
+py -3 -m pip install -r toolkit\requirements.txt
+py -3 -m pip install --upgrade certifi
+```
+
+If Python still fails on HTTPS, point Python to the `certifi` CA bundle for the current terminal session:
+
+```bat
+for /f "delims=" %i in ('py -3 -c "import certifi; print(certifi.where())"') do set SSL_CERT_FILE=%i
+py -3 -m streamlit run toolkit\app.py
+```
+
+### Quick Check
+
+These checks help identify whether the issue is SAC auth or local SSL:
+
+```bash
+curl -I "YOUR_TOKEN_URL"
+python3 -c "import urllib.request; print(urllib.request.urlopen('YOUR_TOKEN_URL').status)"
+```
+
+- If `curl` works but Python fails, fix the local Python certificate setup.
+- If both fail, check network, proxy, or endpoint access.
+
+## Notes
+
+- The Excel template is `toolkit/sac_team_data.xlsx`
+- The sample config is `toolkit/config.ini.example`
+- Local saved config is stored beside the app inside `toolkit/config.ini`
+- In the `Assign_Roles` sheet, `RoleID` must match the exact role ID in your SAC tenant. Standard roles often use `PROFILE:...`; custom role IDs can differ by tenant.
+- For role assignment, the app automatically keeps `PROFILE:...` values as-is and prefixes non-`PROFILE:` values with the configured tenant custom role prefix before sending the SCIM update.
+- For common runtime issues, see `toolkit/COMMON_ERRORS.md`
+- This is a free source-available toolkit, not an OSI-style open-source project
+
+## Known Issues
+
+- Some tenants may still return `403 Forbidden` for SCIM write operations such as `POST /Groups` even when token generation works. In that case, recheck the OAuth client setup in SAC, especially `API Access`, `User Provisioning`, and `Client Credentials`.
+- SAC environments can differ in the SCIM route they accept. This toolkit now tries both `.../scim2` and `.../api/v1/scim` automatically, but tenant-side authorization can still block write operations.
+- `Users` in the current workbook format are treated as existing SAC users. This toolkit does not create new users from the workbook.
+- If you are troubleshooting, use the `Execution Log` in the app. It now shows the configured SCIM candidates, the active SCIM base URL, and the request step trace that ran before the failure.
+
+## More
+
+- Thai README: [toolkit/README_TH.md](toolkit/README_TH.md)
+- Common errors: [toolkit/COMMON_ERRORS.md](toolkit/COMMON_ERRORS.md)
+- License: [toolkit/LICENSE.md](toolkit/LICENSE.md)
