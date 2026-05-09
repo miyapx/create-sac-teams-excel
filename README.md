@@ -26,18 +26,6 @@ SAC_ROLE/
 └── run.bat
 ```
 
-## What Is Inside `toolkit/`
-
-- `app.py` — Streamlit UI
-- `sac_role_core.py` — provisioning logic
-- `sac_team_data.xlsx` — Excel template
-- `config.ini.example` — sample config
-- `requirements.txt` — Python dependencies
-- `miya.png` — app icon
-- `LICENSE.md` — license
-- `README_TH.md` — Thai usage notes
-- `COMMON_ERRORS.md` — common troubleshooting guide
-- `tests/` — local test coverage
 
 ## Run
 
@@ -130,15 +118,8 @@ python3 -c "import urllib.request; print(urllib.request.urlopen('YOUR_TOKEN_URL'
 - For common runtime issues, see `toolkit/COMMON_ERRORS.md`
 - This is a free source-available toolkit, not an OSI-style open-source project
 
-## Known Issues
 
-- Some tenants may still return `403 Forbidden` for SCIM write operations such as `POST /Groups` even when token generation works. In that case, recheck the OAuth client setup in SAC, especially `API Access`, `User Provisioning`, and `Client Credentials`.
-- SAC environments can differ in the SCIM route they accept. This toolkit now tries both `.../scim2` and `.../api/v1/scim` automatically, but tenant-side authorization can still block write operations.
-- `Users` in the current workbook format are treated as existing SAC users. This toolkit does not create new users from the workbook.
-- If you are troubleshooting, use the `Execution Log` in the app. It now shows the configured SCIM candidates, the active SCIM base URL, and the request step trace that ran before the failure.
+## More 
 
-## More
-
-- Thai README: [toolkit/README_TH.md](toolkit/README_TH.md)
 - Common errors: [toolkit/COMMON_ERRORS.md](toolkit/COMMON_ERRORS.md)
 - License: [toolkit/LICENSE.md](toolkit/LICENSE.md)
