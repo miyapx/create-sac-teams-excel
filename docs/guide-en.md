@@ -97,4 +97,4 @@ This repository snapshot was prepared for the workflow current on **9 May 2026**
 
 ## License Note
 
-This repository is shared free of charge for personal, learning, and internal non-commercial use only, with no warranty and no liability. See `LICENSE.md`.
+This repository is shared free of charge for personal, learning, and internal non-commercial use only, with no warranty and no liability. See [LICENSE.md](../LICENSE.md).

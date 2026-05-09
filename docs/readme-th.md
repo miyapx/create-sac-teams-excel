@@ -36,19 +36,17 @@ repo นี้เป็น **implementation ของเราเอง**
 ```text
 SAC_ROLE/
 ├── .streamlit/
-│   └── config.toml
+├── assets/
 ├── data/
-│   └── sac_team_data.xlsx
+├── docs/
+├── examples/
+├── scripts/
+├── tests/
 ├── app.py
 ├── sac_role_core.py
-├── README.md
-├── README_TH.md
-├── LICENSE.md
-├── config.ini.example
 ├── requirements.txt
-├── run.command
-├── run.bat
-└── tests/
+├── README.md
+└── LICENSE.md
 ```
 
 ## โครงสร้าง Excel ที่รองรับ
@@ -93,8 +91,8 @@ python3 -m streamlit run app.py
 
 หรือจะ double-click:
 
-- `run.command` บน macOS
-- `run.bat` บน Windows
+- `scripts/run.command` บน macOS
+- `scripts/run.bat` บน Windows
 
 ## วิธีใช้งาน
 
@@ -177,4 +175,4 @@ repo นี้แจกฟรีสำหรับการใช้งานส
 - ผู้จัดทำไม่รับผิดชอบต่อความเสียหายหรือผลกระทบจากการใช้งาน
 - หากจะนำไปใช้เชิงพาณิชย์ ต้องขออนุญาตแยกต่างหาก
 
-ดูรายละเอียดเพิ่มเติมที่ [LICENSE.md](LICENSE.md)
+ดูรายละเอียดเพิ่มเติมที่ [LICENSE.md](../LICENSE.md)

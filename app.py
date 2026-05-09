@@ -26,7 +26,7 @@ APP_BROWSER_TITLE = "SAC Team"
 APP_TITLE = "Bulk Create SAC Teams from Excel"
 APP_SUBTITLE = "Upload one workbook, validate it, and run team, role, and user assignment from one minimal screen."
 APP_STATUS_DATE = "9 May 2026"
-APP_FAVICON_PATH = Path(__file__).with_name("miya.png")
+APP_FAVICON_PATH = Path(__file__).parent / "assets" / "miya.png"
 TASK_OPTIONS = [
     ("Validate & Preview", "preview", "Check the workbook and preview the planned actions without calling SAC."),
     ("Create Teams", "create-teams", "Create teams from the `Create_Teams` sheet."),
