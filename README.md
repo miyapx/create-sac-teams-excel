@@ -1,4 +1,4 @@
-# Bulk Create SAC Teams from Excel
+# Mass Upload Excel to Create SAC Teams and Assign Roles via Python SCIM API - For SAC Admin & Consultant 
 
 Lightweight local toolkit for SAC admins and consultants to:
 
@@ -8,11 +8,6 @@ Lightweight local toolkit for SAC admins and consultants to:
 
 using one Excel workbook and one Streamlit UI.
 
-## Clean Layout
-
-<<<<<<< HEAD
-Root is intentionally minimal.
-=======
 ## Best For
 
 - SAC consultants preparing or validating team provisioning
@@ -21,8 +16,6 @@ Root is intentionally minimal.
 ## Quick Links
 - License: [LICENSE.md](LICENSE.md)
 
-## Clean Repository Layout
->>>>>>> 287fc98bbfa49fe9658fd5f35d2a9d33b394e6a6
 
 ```text
 SAC_ROLE/
