@@ -10,7 +10,19 @@ using one Excel workbook and one Streamlit UI.
 
 ## Clean Layout
 
+<<<<<<< HEAD
 Root is intentionally minimal.
+=======
+## Best For
+
+- SAC consultants preparing or validating team provisioning
+- SAC admins running controlled local or internal operations
+
+## Quick Links
+- License: [LICENSE.md](LICENSE.md)
+
+## Clean Repository Layout
+>>>>>>> 287fc98bbfa49fe9658fd5f35d2a9d33b394e6a6
 
 ```text
 SAC_ROLE/
