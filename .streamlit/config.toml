@@ -1,0 +1,8 @@
+[browser]
+showEmailPrompt = false
+
+[client]
+toolbarMode = "viewer"
+
+[theme]
+base = "light"
