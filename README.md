@@ -16,8 +16,6 @@ This repository is **our own implementation**. It is shared as a **free source-a
 - SAC admins running controlled local or internal operations
 
 ## Quick Links
-
-- Thai README: [README_TH.md](README_TH.md)
 - License: [LICENSE.md](LICENSE.md)
 
 ## Clean Repository Layout
