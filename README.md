@@ -1,5 +1,3 @@
-# Bulk-create-team-in-SAC-via-excel-python-SCIM-API---for-SAC-Admins-
-Automate SAC Team Creation via Excel + Python SCIM API — A Step-by-Step Guide for SAP Admins
 # SAC Role Provisioning Toolkit
 
 Bulk-manage SAP Analytics Cloud teams, team-role assignments, and user-to-team assignments from a single Excel workbook.
@@ -24,24 +22,21 @@ What comes from SAP documentation in this workspace:
 What is our implementation:
 - the Excel workbook layout used by this repo
 - the Python request flow
-- the CLI and step scripts
-- the dry-run output
-- the role prefix handling
+- the Streamlit application flow
+- the preview output
 
 ## Repository Structure
 
 ```text
 SAC_ROLE/
+├── .streamlit/
+│   └── config.toml
 ├── data/
 │   └── sac_team_data.xlsx
+├── app.py
 ├── sac_role_core.py
-├── sac_role_cli.py
-├── dry_run.py
-├── run_all.py
-├── script_1_create_teams.py
-├── script_2_assign_roles.py
-├── script_3_assign_users.py
-├── check_role_id.py
+├── run.command
+├── run.bat
 ├── config.ini.example
 ├── requirements.txt
 ├── .gitignore
@@ -81,7 +76,7 @@ Example:
 | T_Alpha_Finance_Viewers | R_Viewer |
 
 If `RoleID` already starts with `PROFILE:`, the tool uses it as-is.  
-If not, the tool prepends `custom_role_prefix` from `config.ini`.
+If not, the tool sends the value exactly as written in Excel.
 
 `Assign_Roles` can reference:
 - teams created from `Create_Teams`
@@ -107,72 +102,50 @@ It does not create new users from this workbook, because the workbook does not c
 
 ## Setup
 
-### 1. Install requirements
+### 1. Clone the repo
+
+```bash
+git clone <your-repo-url>
+cd SAC_ROLE
+```
+
+### 2. Install requirements
 
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
-### 2. Create your local config
-
-Copy:
+### 3. Run the app
 
 ```bash
-cp config.ini.example config.ini
+python3 -m streamlit run app.py
 ```
 
-Then fill in:
-- `tenant_url`
-- `token_url`
-- `client_id`
-- `client_secret`
-- `custom_role_prefix`
+Or double-click:
+- `run.command` on macOS
+- `run.bat` on Windows
 
-`config.ini` is ignored by Git on purpose.
+No `config.ini` is required to start the app.
+The Streamlit onboarding email prompt is already disabled in `.streamlit/config.toml`.
 
 ## Usage
 
-### Dry run
+### In the app
 
-```bash
-python3 dry_run.py
-```
-
-This validates the workbook and prints the exact operations the tool would perform.
-
-### Step 1: Create teams
-
-```bash
-python3 script_1_create_teams.py
-```
-
-### Step 2: Assign roles to teams
-
-```bash
-python3 script_2_assign_roles.py
-```
-
-### Step 3: Assign users to teams
-
-```bash
-python3 script_3_assign_users.py
-```
-
-### Run everything
-
-```bash
-python3 run_all.py
-```
-
-### Advanced CLI
-
-```bash
-python3 sac_role_cli.py dry-run
-python3 sac_role_cli.py create-teams
-python3 sac_role_cli.py assign-roles
-python3 sac_role_cli.py assign-users
-python3 sac_role_cli.py all
-```
+1. Upload `sac_team_data.xlsx`, or use the bundled sample workbook.
+2. Fill in the SAC connection values in the sidebar:
+   - `tenant_url`
+   - `token_url`
+   - `client_id`
+   - `client_secret`
+3. Optional: click `Save config locally` if you want the values stored in local `config.ini`
+4. Optional: click `Load saved config` to reload the local file into the sidebar
+5. Click `Validate & Preview` to validate the workbook and see planned operations.
+6. Click:
+   - `Step 1 Create Teams`
+   - `Step 2 Assign Roles`
+   - `Step 3 Assign Users`
+   - or `Run All`
 
 ## Local Verification
 
@@ -185,13 +158,13 @@ python3 -m unittest discover -s tests -v
 Run syntax check:
 
 ```bash
-python3 -m py_compile sac_role_core.py sac_role_cli.py
+python3 -m py_compile sac_role_core.py app.py
 ```
 
 ## Notes on Safety
 
 - No secrets are stored in code anymore.
-- `config.ini` is excluded from Git.
-- `dry_run.py` is the safest first command to run.
+- `config.ini` is optional and excluded from Git.
+- `Validate & Preview` is the safest first action to run.
 - If a team does not exist, role assignment will fail fast.
 - If a user in the workbook does not already exist in SAC, user-to-team assignment will fail fast.
